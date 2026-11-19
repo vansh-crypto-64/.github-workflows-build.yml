@@ -1,0 +1,6 @@
+{
+  "name": "Skyforge 10",
+  "description": "An infinite open-world 3D survival crafting game where 3D resources drop from the sky and you have 10 days to build your base as high as possible before molten lava floods the world.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
