@@ -23,8 +23,8 @@ jobs:
         run: |
           npm install --legacy-peer-deps
           npm run build
-          npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
-          npx cap init "GTA 3D Game" "com.vansh.gta3d" --web-dir=dist
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 --legacy-peer-deps
+          echo '{"appId":"com.vansh.gta3d","appName":"GTA 3D Game","webDir":"dist"}' > capacitor.config.json
           npx cap add android
           npx cap sync android
       - name: Build APK
