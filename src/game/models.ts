@@ -146,25 +146,20 @@ export function createCarModel(
   spoiler.position.set(0, 1.18, 2.08);
   group.add(spoiler);
 
-  // Headlights (-Z front), Volumetric Headlight Beam Cones & Taillights (+Z rear)
+  // Headlights (-Z front) & Taillights (+Z rear)
   const lightGeo = new THREE.BoxGeometry(0.46, 0.18, 0.08);
-  const beamGeo = new THREE.ConeGeometry(1.4, 7.5, 10, 1, true);
-  beamGeo.rotateX(-Math.PI / 2);
-
   [-0.72, 0.72].forEach((x) => {
     const hl = new THREE.Mesh(lightGeo, mats.headlight);
     hl.position.set(x, 0.76, -2.31);
     const tl = new THREE.Mesh(lightGeo, mats.taillight);
     tl.position.set(x, 0.78, 2.31);
-    const beam = new THREE.Mesh(beamGeo, mats.lightConeCool);
-    beam.position.set(x, 0.72, -6.1);
-    group.add(hl, tl, beam);
+    group.add(hl, tl);
   });
 
-  // 4 Wheels with metallic rims
-  const wheelGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.28, 14);
+  // 4 Wheels with metallic rims (low poly for smooth Android 4 performance)
+  const wheelGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.28, 8);
   wheelGeo.rotateZ(Math.PI / 2);
-  const rimGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.3, 10);
+  const rimGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.3, 6);
   rimGeo.rotateZ(Math.PI / 2);
 
   const wheelCoords = [
@@ -439,3 +434,110 @@ export function createFirstPersonGun(
 
   return { group, flash };
 }
+
+/**
+ * Composite 3D Alpine Mountain with rocky base, secondary ridge peak, and snow cap (low poly for Android 4+).
+ */
+export function createMountainModel(
+  radius: number,
+  height: number,
+  mats: CityMaterialLibrary
+): THREE.Group {
+  const group = new THREE.Group();
+
+  // Main rocky cone
+  const mainPeak = new THREE.Mesh(
+    new THREE.ConeGeometry(radius, height, 6),
+    mats.mountainRock
+  );
+  mainPeak.position.y = height * 0.5;
+  group.add(mainPeak);
+
+  // Snow-capped summit
+  const snowH = height * 0.34;
+  const snowR = radius * 0.36;
+  const snow = new THREE.Mesh(new THREE.ConeGeometry(snowR, snowH, 6), mats.snowCap);
+  snow.position.y = height - snowH * 0.48;
+  group.add(snow);
+
+  // Secondary shoulder peak
+  const sidePeak = new THREE.Mesh(
+    new THREE.ConeGeometry(radius * 0.62, height * 0.62, 5),
+    mats.mountainRock
+  );
+  sidePeak.position.set(radius * 0.48, height * 0.31, radius * 0.22);
+  group.add(sidePeak);
+
+  return group;
+}
+
+/**
+ * Composite Stepped Sandstone Mesa for Golden Desert biome.
+ */
+export function createDesertMesaModel(
+  width: number,
+  height: number,
+  depth: number,
+  mats: CityMaterialLibrary
+): THREE.Group {
+  const group = new THREE.Group();
+
+  const base = new THREE.Mesh(new THREE.BoxGeometry(width, height * 0.58, depth), mats.mesaRock);
+  base.position.y = height * 0.29;
+  group.add(base);
+
+  const top = new THREE.Mesh(
+    new THREE.BoxGeometry(width * 0.72, height * 0.46, depth * 0.72),
+    mats.mesaRock
+  );
+  top.position.set(width * 0.05, height * 0.78, -depth * 0.04);
+  group.add(top);
+
+  return group;
+}
+
+/**
+ * Composite 3-part Saguaro Cactus for Golden Desert biome.
+ */
+export function createCactusModel(mats: CityMaterialLibrary): THREE.Group {
+  const group = new THREE.Group();
+
+  const trunk = new THREE.Mesh(new THREE.BoxGeometry(0.46, 3.4, 0.46), mats.cactusGreen);
+  trunk.position.y = 1.7;
+  group.add(trunk);
+
+  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.32, 1.25, 0.32), mats.cactusGreen);
+  armL.position.set(-0.56, 2.25, 0);
+  const armLJoin = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.3, 0.3), mats.cactusGreen);
+  armLJoin.position.set(-0.34, 1.75, 0);
+
+  const armR = new THREE.Mesh(new THREE.BoxGeometry(0.32, 1.05, 0.32), mats.cactusGreen);
+  armR.position.set(0.56, 2.55, 0);
+  const armRJoin = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.3, 0.3), mats.cactusGreen);
+  armRJoin.position.set(0.34, 2.15, 0);
+
+  group.add(armL, armLJoin, armR, armRJoin);
+  return group;
+}
+
+/**
+ * Composite 2-tier Tree for Green Plains & River Valley banks.
+ */
+export function createPlainsTreeModel(mats: CityMaterialLibrary): THREE.Group {
+  const group = new THREE.Group();
+
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.28, 2.8, 6), mats.craftWood);
+  trunk.position.y = 1.4;
+  group.add(trunk);
+
+  const lower = new THREE.Mesh(new THREE.ConeGeometry(2.1, 3.2, 6), mats.foliageMat);
+  lower.position.y = 3.7;
+  group.add(lower);
+
+  const upper = new THREE.Mesh(new THREE.ConeGeometry(1.45, 2.5, 6), mats.foliageMat);
+  upper.position.y = 5.4;
+  group.add(upper);
+
+  return group;
+}
+

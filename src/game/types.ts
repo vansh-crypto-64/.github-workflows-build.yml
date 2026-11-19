@@ -4,6 +4,16 @@ export type WeaponId = 'pistol' | 'smg' | 'shotgun' | 'railgun';
 
 export type WeatherState = 'clear' | 'cloudy' | 'rain';
 
+export type BiomeId = 'city' | 'plains' | 'desert' | 'mountain' | 'river';
+
+export const BIOME_LABELS: Record<BiomeId, string> = {
+  city: 'Metro City',
+  plains: 'Green Plains',
+  desert: 'Golden Desert',
+  mountain: 'Alpine Peaks',
+  river: 'River Valley',
+};
+
 export interface WeaponDef {
   id: WeaponId;
   name: string;
@@ -141,7 +151,7 @@ export const STORY_CHAPTERS: StoryChapter[] = [
     level: 4,
     rank: 'District Enforcer',
     title: 'Chapter 4: Syndicate Takedown',
-    objective: 'Eliminate 5 Syndicate Enforcers patrolling the city blocks',
+    objective: 'Eliminate 3 Syndicate Enforcers patrolling the region',
     cinematicHeadline: 'CHAPTER 04 · SYNDICATE TAKEDOWN',
     cinematicSubtitle:
       'The Syndicate owns these towers. Break their patrols and take their tech cores.',
@@ -186,6 +196,7 @@ export interface HudSnapshot {
   timeOfDayLabel: string;
   dayCount: number;
   weather: WeatherState;
+  biomeLabel: string;
   cinematicHeadline: string;
   cinematicSubtitle: string;
   hitMarker: boolean;

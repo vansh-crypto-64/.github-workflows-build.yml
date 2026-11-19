@@ -1,23 +1,23 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
 import { GameAudio } from './audio';
 import { CityMaterialLibrary, createCityMaterials } from './materials';
 import {
   createBuildingModel,
+  createCactusModel,
   createCarModel,
   createCraftTableModel,
+  createDesertMesaModel,
   createFirstPersonGun,
   createLootCrateModel,
+  createMountainModel,
   createNpcModel,
+  createPlainsTreeModel,
   NpcModelRig,
 } from './models';
 import {
+  BIOME_LABELS,
+  BiomeId,
   GamePhase,
   HudSnapshot,
   STORY_CHAPTERS,
@@ -119,7 +119,10 @@ function hash2D(x: number, z: number): number {
 
 function detectSoftwareWebGL(): boolean {
   try {
-    const gl = document.createElement('canvas').getContext('webgl2');
+    const canvas = document.createElement('canvas');
+    const gl =
+      (canvas.getContext('webgl2') as WebGL2RenderingContext | null) ||
+      (canvas.getContext('webgl') as WebGLRenderingContext | null);
     if (!gl) return true;
     const ext = gl.getExtension('WEBGL_debug_renderer_info');
     const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
@@ -137,9 +140,8 @@ export class InfiniteCityEngine {
   public readonly audio = new GameAudio();
 
   private isSoftwareGl: boolean;
+  private isLowEndMobile: boolean;
   private renderer: THREE.WebGLRenderer;
-  private composer: EffectComposer | null = null;
-  private bloomPass: UnrealBloomPass | null = null;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private mats: CityMaterialLibrary;
@@ -148,19 +150,19 @@ export class InfiniteCityEngine {
   // Lighting, Sky, Clouds & Rain
   private sunLight: THREE.DirectionalLight;
   private hemiLight: THREE.HemisphereLight;
-  private carSpotLight: THREE.SpotLight;
   private skyDome: THREE.Mesh;
   private fog: THREE.FogExp2;
   private cloudGroup: THREE.Group;
   private clouds: THREE.Group[] = [];
   private rainLines: THREE.LineSegments;
   private rainPos: Float32Array;
-  private readonly rainCount = 240;
+  private readonly rainCount = 120;
 
-  // Infinite City Chunks
+  // Infinite Multi-Biome World Chunks
   private chunks = new Map<string, CityChunk>();
   private lastChunkX = Number.NaN;
   private lastChunkZ = Number.NaN;
+  private currentBiome: BiomeId = 'city';
   private allColliders: BuildingCollider[] = [];
   private craftTables: THREE.Vector3[] = [];
 
@@ -271,30 +273,35 @@ export class InfiniteCityEngine {
     this.container = container;
     this.onHudUpdate = onHudUpdate;
     this.isSoftwareGl = detectSoftwareWebGL();
+    this.isLowEndMobile =
+      window.innerWidth <= 900 || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x283a52);
-    this.fog = new THREE.FogExp2(0x526b84, 0.0095);
+    this.fog = new THREE.FogExp2(0x526b84, 0.0085);
     this.scene.fog = this.fog;
 
     const w = container.clientWidth || window.innerWidth;
     const h = container.clientHeight || window.innerHeight;
     const initialFov = h > w ? 78 : 68;
-    this.camera = new THREE.PerspectiveCamera(initialFov, w / h, 0.08, 300);
+    this.camera = new THREE.PerspectiveCamera(initialFov, w / h, 0.08, 240);
     this.camera.rotation.order = 'YXZ';
     this.scene.add(this.camera);
 
+    const enableShadows = !this.isSoftwareGl && !this.isLowEndMobile;
     this.renderer = new THREE.WebGLRenderer({
-      antialias: !this.isSoftwareGl,
-      powerPreference: 'high-performance',
+      antialias: enableShadows,
+      powerPreference: 'default',
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.1;
-    this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
+    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.setPixelRatio(
+      this.isSoftwareGl || this.isLowEndMobile ? 1 : Math.min(window.devicePixelRatio || 1, 1.25)
+    );
     this.renderer.setSize(w, h);
-    this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.enabled = enableShadows;
+    this.renderer.shadowMap.type = THREE.BasicShadowMap;
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
@@ -308,27 +315,27 @@ export class InfiniteCityEngine {
 
     this.mats = createCityMaterials(this.renderer);
 
-    // Atmospheric Sky Dome
-    this.skyDome = new THREE.Mesh(new THREE.SphereGeometry(250, 24, 16), this.mats.skyMaterial);
+    // Lightweight Atmospheric Sky Dome
+    this.skyDome = new THREE.Mesh(new THREE.SphereGeometry(210, 16, 12), this.mats.skyMaterial);
     this.skyDome.frustumCulled = false;
     this.scene.add(this.skyDome);
 
-    // 3D Volumetric-Style Floating Clouds high above the city skyline
+    // Lightweight Floating Clouds
     this.cloudGroup = new THREE.Group();
     this.scene.add(this.cloudGroup);
     this.buildSkyClouds();
 
-    // 3D Rain Streaks
+    // Lightweight 3D Rain Streaks
     this.rainPos = new Float32Array(this.rainCount * 2 * 3);
     for (let i = 0; i < this.rainCount; i++) {
-      this.setRainDrop(i, (Math.random() - 0.5) * 44, Math.random() * 28, (Math.random() - 0.5) * 44);
+      this.setRainDrop(i, (Math.random() - 0.5) * 40, Math.random() * 24, (Math.random() - 0.5) * 40);
     }
     const rainGeo = new THREE.BufferGeometry();
     rainGeo.setAttribute('position', new THREE.BufferAttribute(this.rainPos, 3));
     const rainMat = new THREE.LineBasicMaterial({
       color: 0xcbd5e1,
       transparent: true,
-      opacity: 0.45,
+      opacity: 0.42,
       depthWrite: false,
     });
     this.rainLines = new THREE.LineSegments(rainGeo, rainMat);
@@ -336,55 +343,23 @@ export class InfiniteCityEngine {
     this.rainLines.visible = false;
     this.scene.add(this.rainLines);
 
-    // Realistic Outdoor Day/Night Lighting Rig
-    this.hemiLight = new THREE.HemisphereLight(0x9ac4f0, 0x262830, 0.78);
+    // Outdoor Day/Night Lighting Rig (Android 4+ friendly)
+    this.hemiLight = new THREE.HemisphereLight(0x9ac4f0, 0x32363e, 0.85);
     this.scene.add(this.hemiLight);
 
-    this.sunLight = new THREE.DirectionalLight(0xfff1d6, 2.15);
+    this.sunLight = new THREE.DirectionalLight(0xfff1d6, 2.0);
     this.sunLight.position.set(35, 55, 25);
-    this.sunLight.castShadow = !this.isSoftwareGl;
-    this.sunLight.shadow.mapSize.set(this.isSoftwareGl ? 512 : 2048, this.isSoftwareGl ? 512 : 2048);
+    this.sunLight.castShadow = enableShadows;
+    this.sunLight.shadow.mapSize.set(512, 512);
     this.sunLight.shadow.camera.near = 2;
-    this.sunLight.shadow.camera.far = 165;
-    const sd = 44;
+    this.sunLight.shadow.camera.far = 140;
+    const sd = 40;
     this.sunLight.shadow.camera.left = -sd;
     this.sunLight.shadow.camera.right = sd;
     this.sunLight.shadow.camera.top = sd;
     this.sunLight.shadow.camera.bottom = -sd;
-    this.sunLight.shadow.bias = -0.0004;
-    this.sunLight.shadow.normalBias = 0.025;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
-
-    // Dynamic Car Headlight SpotLight (illuminates wet roads & buildings when driving!)
-    this.carSpotLight = new THREE.SpotLight(0xfef9c3, 0, 52, Math.PI / 4.2, 0.5, 1.3);
-    this.scene.add(this.carSpotLight);
-    this.scene.add(this.carSpotLight.target);
-
-    // HDR Post-Processing Pipeline (GPU only: UnrealBloom + Cinematic Vignette + OutputPass)
-    if (!this.isSoftwareGl) {
-      const composer = new EffectComposer(this.renderer);
-      composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      composer.setSize(w, h);
-      composer.addPass(new RenderPass(this.scene, this.camera));
-
-      const bloomPass = new UnrealBloomPass(
-        new THREE.Vector2(w, h),
-        0.58, // rich neon & headlight bloom strength
-        0.48, // smooth cinematic halo radius
-        0.82 // threshold so only emissive neon/windows/flashes/lights glow
-      );
-      composer.addPass(bloomPass);
-
-      const vignettePass = new ShaderPass(VignetteShader);
-      vignettePass.uniforms['offset'].value = 1.05;
-      vignettePass.uniforms['darkness'].value = 1.08;
-      composer.addPass(vignettePass);
-
-      composer.addPass(new OutputPass());
-      this.composer = composer;
-      this.bloomPass = bloomPass;
-    }
 
     // First-Person Weapons attached to camera
     this.fpGunHolder.position.set(0.26, -0.22, -0.4);
@@ -441,23 +416,23 @@ export class InfiniteCityEngine {
 
   private buildSkyClouds(): void {
     const puffGeo = new THREE.BoxGeometry(1, 1, 1);
-    for (let i = 0; i < 18; i++) {
+    for (let i = 0; i < 10; i++) {
       const cluster = new THREE.Group();
-      const puffs = 3 + Math.floor(Math.random() * 3);
+      const puffs = 2 + Math.floor(Math.random() * 2);
       for (let p = 0; p < puffs; p++) {
         const mesh = new THREE.Mesh(puffGeo, this.mats.cloudMat);
         mesh.scale.set(
-          9 + Math.random() * 14,
-          2.6 + Math.random() * 2.5,
-          7 + Math.random() * 10
+          9 + Math.random() * 12,
+          2.4 + Math.random() * 2.2,
+          7 + Math.random() * 9
         );
-        mesh.position.set((p - 1.5) * 6.5, (Math.random() - 0.5) * 1.8, (Math.random() - 0.5) * 5);
+        mesh.position.set((p - 1) * 6.5, (Math.random() - 0.5) * 1.4, (Math.random() - 0.5) * 4);
         cluster.add(mesh);
       }
       cluster.position.set(
-        (Math.random() - 0.5) * 260,
-        66 + Math.random() * 26,
-        (Math.random() - 0.5) * 260
+        (Math.random() - 0.5) * 220,
+        62 + Math.random() * 22,
+        (Math.random() - 0.5) * 220
       );
       this.cloudGroup.add(cluster);
       this.clouds.push(cluster);
@@ -474,10 +449,34 @@ export class InfiniteCityEngine {
     this.rainPos[b + 5] = z - 0.08;
   }
 
-  // --- Deterministic Infinite City Chunk Generation ---
+  // --- Deterministic Multi-Biome Infinite World Generator ---
+  private getBiomeAt(cx: number, cz: number): BiomeId {
+    // Spawn hub is always Metro City with a Craft Table & starter car
+    if (cx === 0 && cz === 0) return 'city';
+
+    // Winding River Valley cutting across the infinite world
+    const riverNorth = Math.round(Math.sin(cx * 0.55) * 1.4) + 2;
+    const riverSouth = Math.round(Math.cos(cx * 0.45) * 1.4) - 4;
+    if (cz === riverNorth || cz === riverSouth) return 'river';
+
+    // Immediate variety right around spawn so the world feels rich & distinct
+    if (cx === 1 && cz === 0) return 'plains';
+    if (cx === -1 && cz === 0) return 'desert';
+    if (cx === 0 && cz === -1) return 'mountain';
+
+    // Smooth regional biome distribution across the infinite map
+    const region =
+      Math.sin(cx * 0.42 + cz * 0.28) * 0.6 + Math.cos(cx * 0.25 - cz * 0.48) * 0.6;
+    if (region < -0.45) return 'desert';
+    if (region < 0.05) return 'plains';
+    if (region < 0.48) return 'mountain';
+    return 'city';
+  }
+
   private updateCityChunks(force = false): void {
     const curCx = Math.floor(this.playerPos.x / CHUNK_SIZE);
     const curCz = Math.floor(this.playerPos.z / CHUNK_SIZE);
+    this.currentBiome = this.getBiomeAt(curCx, curCz);
     if (!force && curCx === this.lastChunkX && curCz === this.lastChunkZ) return;
     this.lastChunkX = curCx;
     this.lastChunkZ = curCz;
@@ -497,7 +496,7 @@ export class InfiniteCityEngine {
       }
     }
 
-    // Recycle distant chunks to keep memory & draw calls flat in infinite world
+    // Recycle distant chunks to keep memory & draw calls low on Android 4+
     for (const [key, chunk] of this.chunks.entries()) {
       if (!needed.has(key)) {
         this.scene.remove(chunk.group);
@@ -522,121 +521,285 @@ export class InfiniteCityEngine {
 
     const colliders: BuildingCollider[] = [];
     const seed = hash2D(cx, cz);
-
-    // Asphalt road base covering full 34x34m chunk
-    const roadMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE),
-      this.mats.asphalt
-    );
-    roadMesh.rotation.x = -Math.PI / 2;
-    roadMesh.receiveShadow = !this.isSoftwareGl;
-    group.add(roadMesh);
-
-    // Raised Sidewalk Plaza in center (22m x 22m -> leaves 12m wide avenue roads!)
-    const plazaSize = 22;
-    const plaza = new THREE.Mesh(
-      new THREE.BoxGeometry(plazaSize, 0.22, plazaSize),
-      this.mats.sidewalk
-    );
-    plaza.position.y = 0.11;
-    plaza.receiveShadow = !this.isSoftwareGl;
-    group.add(plaza);
-
-    // Streetlamps with volumetric warm light cones + urban sidewalk planters/trees
-    const poleGeo = new THREE.CylinderGeometry(0.09, 0.13, 5.4, 8);
-    const armGeo = new THREE.BoxGeometry(1.1, 0.12, 0.14);
-    const bulbGeo = new THREE.BoxGeometry(0.55, 0.18, 0.3);
-    const coneGeo = new THREE.ConeGeometry(3.2, 5.4, 12, 1, true);
-    [
-      [-9.8, -9.8, 1],
-      [9.8, 9.8, -1],
-    ].forEach(([lx, lz, inward]) => {
-      const pole = new THREE.Mesh(poleGeo, this.mats.carTrim);
-      pole.position.set(lx, 2.75, lz);
-      const arm = new THREE.Mesh(armGeo, this.mats.carTrim);
-      arm.position.set(lx - inward * 0.45, 5.35, lz);
-      const bulb = new THREE.Mesh(bulbGeo, this.mats.headlight);
-      bulb.position.set(lx - inward * 0.85, 5.28, lz);
-      const cone = new THREE.Mesh(coneGeo, this.mats.lightConeWarm);
-      cone.position.set(lx - inward * 0.85, 2.65, lz);
-      group.add(pole, arm, bulb, cone);
-    });
-
-    // Architectural sidewalk planter + stylized urban tree on opposite corner
-    const planter = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.55, 1.7), this.mats.roofDark);
-    planter.position.set(-9.4, 0.48, 9.4);
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, 2.1, 7), this.mats.craftWood);
-    trunk.position.set(-9.4, 1.6, 9.4);
-    const canopy = new THREE.Mesh(new THREE.DodecahedronGeometry(1.25, 1), this.mats.foliageMat);
-    canopy.position.set(-9.4, 3.1, 9.4);
-    canopy.scale.set(1.05, 1.15, 1.05);
-    group.add(planter, trunk, canopy);
-
-    // Buildings inside the 22x22 plaza (leave corner clear for Craft Table on some blocks)
+    const biome = this.getBiomeAt(cx, cz);
+    const castShadow = !this.isSoftwareGl && !this.isLowEndMobile;
     let craftTablePos: THREE.Vector3 | null = null;
-    const hasCraftTable = (cx === 0 && cz === 0) || ((Math.abs(cx + cz) % 2 === 0) && seed > 0.45);
 
-    if (hasCraftTable) {
-      // Single sleek tower + Open Craft Plaza corner
-      const bW = 11 + hash2D(cx + 3, cz) * 3;
-      const bD = 11 + hash2D(cx, cz + 7) * 3;
-      const bH = 16 + Math.floor(hash2D(cx * 2, cz * 2) * 34);
-      const style = (Math.abs(cx + cz) % 3) as 0 | 1 | 2;
-      const bx = -2.8;
-      const bz = -2.8;
+    if (biome === 'city') {
+      // Asphalt road base covering full 34x34m chunk
+      const roadMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE),
+        this.mats.asphalt
+      );
+      roadMesh.rotation.x = -Math.PI / 2;
+      roadMesh.receiveShadow = castShadow;
+      group.add(roadMesh);
 
-      const bldg = createBuildingModel(bW, bH, bD, style, this.mats, !this.isSoftwareGl);
-      bldg.position.set(bx, 0.22, bz);
-      group.add(bldg);
-      colliders.push({
-        minX: ox + bx - bW / 2 - 0.3,
-        maxX: ox + bx + bW / 2 + 0.3,
-        minZ: oz + bz - bD / 2 - 0.3,
-        maxZ: oz + bz + bD / 2 + 0.3,
-        height: bH,
+      // Raised Sidewalk Plaza in center (22m x 22m -> leaves 12m wide avenue roads)
+      const plaza = new THREE.Mesh(new THREE.BoxGeometry(22, 0.22, 22), this.mats.sidewalk);
+      plaza.position.y = 0.11;
+      plaza.receiveShadow = castShadow;
+      group.add(plaza);
+
+      // Lightweight Streetlamps (no volumetric cone overhead for Android 4+)
+      const poleGeo = new THREE.CylinderGeometry(0.09, 0.12, 5.2, 6);
+      const bulbGeo = new THREE.BoxGeometry(0.5, 0.18, 0.28);
+      [
+        [-9.8, -9.8],
+        [9.8, 9.8],
+      ].forEach(([lx, lz]) => {
+        const pole = new THREE.Mesh(poleGeo, this.mats.carTrim);
+        pole.position.set(lx, 2.65, lz);
+        const bulb = new THREE.Mesh(bulbGeo, this.mats.headlight);
+        bulb.position.set(lx, 5.2, lz);
+        group.add(pole, bulb);
       });
 
-      // Place 3D Weapon Craft Table in the sunlit open corner
-      const table = createCraftTableModel(this.mats);
-      table.position.set(6.8, 0.22, 6.8);
-      table.rotation.y = -Math.PI / 4;
-      group.add(table);
-      craftTablePos = new THREE.Vector3(ox + 6.8, 0.22, oz + 6.8);
+      const hasCraftTable = (cx === 0 && cz === 0) || (Math.abs(cx + cz) % 2 === 0 && seed > 0.45);
+      if (hasCraftTable) {
+        const bW = 11 + hash2D(cx + 3, cz) * 3;
+        const bD = 11 + hash2D(cx, cz + 7) * 3;
+        const bH = 16 + Math.floor(hash2D(cx * 2, cz * 2) * 30);
+        const style = (Math.abs(cx + cz) % 3) as 0 | 1 | 2;
+        const bx = -2.8;
+        const bz = -2.8;
+
+        const bldg = createBuildingModel(bW, bH, bD, style, this.mats, castShadow);
+        bldg.position.set(bx, 0.22, bz);
+        group.add(bldg);
+        colliders.push({
+          minX: ox + bx - bW / 2 - 0.3,
+          maxX: ox + bx + bW / 2 + 0.3,
+          minZ: oz + bz - bD / 2 - 0.3,
+          maxZ: oz + bz + bD / 2 + 0.3,
+          height: bH,
+        });
+
+        const table = createCraftTableModel(this.mats);
+        table.position.set(6.8, 0.22, 6.8);
+        table.rotation.y = -Math.PI / 4;
+        group.add(table);
+        craftTablePos = new THREE.Vector3(ox + 6.8, 0.22, oz + 6.8);
+      } else {
+        const b1W = 8.4 + hash2D(cx + 1, cz) * 1.4;
+        const b1D = 17.5;
+        const b1H = 14 + Math.floor(hash2D(cx * 3, cz) * 34);
+        const s1 = (Math.abs(cx * 3 + cz) % 3) as 0 | 1 | 2;
+        const b1 = createBuildingModel(b1W, b1H, b1D, s1, this.mats, castShadow);
+        b1.position.set(-5.0, 0.22, 0);
+        group.add(b1);
+        colliders.push({
+          minX: ox - 5.0 - b1W / 2 - 0.3,
+          maxX: ox - 5.0 + b1W / 2 + 0.3,
+          minZ: oz - b1D / 2 - 0.3,
+          maxZ: oz + b1D / 2 + 0.3,
+          height: b1H,
+        });
+
+        const b2W = 7.6 + hash2D(cx, cz + 5) * 1.6;
+        const b2D = 16.5;
+        const b2H = 12 + Math.floor(hash2D(cx, cz * 5) * 30);
+        const s2 = ((s1 + 1) % 3) as 0 | 1 | 2;
+        const b2 = createBuildingModel(b2W, b2H, b2D, s2, this.mats, castShadow);
+        b2.position.set(5.2, 0.22, 0);
+        group.add(b2);
+        colliders.push({
+          minX: ox + 5.2 - b2W / 2 - 0.3,
+          maxX: ox + 5.2 + b2W / 2 + 0.3,
+          minZ: oz - b2D / 2 - 0.3,
+          maxZ: oz + b2D / 2 + 0.3,
+          height: b2H,
+        });
+      }
+    } else if (biome === 'plains') {
+      // Open Green Plains biome with grass meadow, country road edge & pine trees
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE),
+        this.mats.grass
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = castShadow;
+      group.add(ground);
+
+      // Subtle country road strip along the +X border so cars can cruise cleanly
+      const roadStrip = new THREE.Mesh(new THREE.PlaneGeometry(7.5, CHUNK_SIZE), this.mats.asphalt);
+      roadStrip.rotation.x = -Math.PI / 2;
+      roadStrip.position.set(CHUNK_SIZE / 2 - 3.75, 0.02, 0);
+      group.add(roadStrip);
+
+      // Scatter 4 composite pine trees inside the meadow
+      const treeSpots = [
+        [-8, -7],
+        [-2, 6],
+        [4, -8],
+        [-9, 8],
+      ];
+      treeSpots.forEach(([tx, tz], i) => {
+        const jx = tx + (hash2D(cx + i, cz) - 0.5) * 3.5;
+        const jz = tz + (hash2D(cx, cz + i) - 0.5) * 3.5;
+        const tree = createPlainsTreeModel(this.mats);
+        const sc = 0.85 + hash2D(cx + i * 2, cz - i) * 0.45;
+        tree.scale.setScalar(sc);
+        tree.position.set(jx, 0, jz);
+        group.add(tree);
+        colliders.push({
+          minX: ox + jx - 0.7,
+          maxX: ox + jx + 0.7,
+          minZ: oz + jz - 0.7,
+          maxZ: oz + jz + 0.7,
+          height: 5,
+        });
+      });
+
+      if (seed > 0.72) {
+        const table = createCraftTableModel(this.mats);
+        table.position.set(3.5, 0.05, 3.5);
+        group.add(table);
+        craftTablePos = new THREE.Vector3(ox + 3.5, 0.05, oz + 3.5);
+      }
+    } else if (biome === 'desert') {
+      // Golden Desert biome with sand dunes, sandstone mesas & saguaro cacti
+      const sandGround = new THREE.Mesh(
+        new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE),
+        this.mats.sand
+      );
+      sandGround.rotation.x = -Math.PI / 2;
+      sandGround.receiveShadow = castShadow;
+      group.add(sandGround);
+
+      // Stepped Sandstone Mesa rock formation
+      const mW = 7 + hash2D(cx + 2, cz) * 5;
+      const mD = 6 + hash2D(cx, cz + 4) * 5;
+      const mH = 7 + hash2D(cx * 3, cz * 2) * 9;
+      const mx = -4.5 + (seed - 0.5) * 4;
+      const mz = -3.5 + (hash2D(cx, cz + 9) - 0.5) * 4;
+      const mesa = createDesertMesaModel(mW, mH, mD, this.mats);
+      mesa.position.set(mx, 0, mz);
+      group.add(mesa);
+      colliders.push({
+        minX: ox + mx - mW / 2,
+        maxX: ox + mx + mW / 2,
+        minZ: oz + mz - mD / 2,
+        maxZ: oz + mz + mD / 2,
+        height: mH,
+      });
+
+      // Saguaro cacti scattered on the dunes
+      [
+        [7.5, -6.5],
+        [5.5, 8.2],
+        [-9.5, 7.0],
+      ].forEach(([kx, kz], i) => {
+        const cactus = createCactusModel(this.mats);
+        cactus.position.set(kx, 0, kz);
+        cactus.rotation.y = hash2D(cx + i, cz) * Math.PI * 2;
+        group.add(cactus);
+        colliders.push({
+          minX: ox + kx - 0.5,
+          maxX: ox + kx + 0.5,
+          minZ: oz + kz - 0.5,
+          maxZ: oz + kz + 0.5,
+          height: 3.4,
+        });
+      });
+
+      if (seed > 0.76) {
+        const table = createCraftTableModel(this.mats);
+        table.position.set(8.5, 0.05, 1.5);
+        group.add(table);
+        craftTablePos = new THREE.Vector3(ox + 8.5, 0.05, oz + 1.5);
+      }
+    } else if (biome === 'mountain') {
+      // Alpine Peaks biome with towering snow-capped 3D mountains & mountain pass
+      const baseGround = new THREE.Mesh(
+        new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE),
+        this.mats.grass
+      );
+      baseGround.rotation.x = -Math.PI / 2;
+      baseGround.receiveShadow = castShadow;
+      group.add(baseGround);
+
+      // Two towering snow-capped peaks positioned to leave a drivable mountain pass along the edges
+      const m1R = 8.5 + hash2D(cx + 1, cz) * 3.5;
+      const m1H = 22 + hash2D(cx * 2, cz + 3) * 20;
+      const m1 = createMountainModel(m1R, m1H, this.mats);
+      m1.position.set(-5.5, 0, -4.5);
+      group.add(m1);
+      colliders.push({
+        minX: ox - 5.5 - m1R * 0.62,
+        maxX: ox - 5.5 + m1R * 0.62,
+        minZ: oz - 4.5 - m1R * 0.62,
+        maxZ: oz - 4.5 + m1R * 0.62,
+        height: m1H,
+      });
+
+      const m2R = 6.2 + hash2D(cx, cz + 5) * 2.8;
+      const m2H = 15 + hash2D(cx + 4, cz * 2) * 14;
+      const m2 = createMountainModel(m2R, m2H, this.mats);
+      m2.position.set(5.5, 0, 5.5);
+      group.add(m2);
+      colliders.push({
+        minX: ox + 5.5 - m2R * 0.6,
+        maxX: ox + 5.5 + m2R * 0.6,
+        minZ: oz + 5.5 - m2R * 0.6,
+        maxZ: oz + 5.5 + m2R * 0.6,
+        height: m2H,
+      });
+
+      const pine = createPlainsTreeModel(this.mats);
+      pine.position.set(7.5, 0, -8.5);
+      group.add(pine);
     } else {
-      // Two varied skyscraper / commercial towers per city block
-      const b1W = 8.4 + hash2D(cx + 1, cz) * 1.4;
-      const b1D = 17.5;
-      const b1H = 14 + Math.floor(hash2D(cx * 3, cz) * 38);
-      const s1 = (Math.abs(cx * 3 + cz) % 3) as 0 | 1 | 2;
-      const b1 = createBuildingModel(b1W, b1H, b1D, s1, this.mats, !this.isSoftwareGl);
-      b1.position.set(-5.0, 0.22, 0);
-      group.add(b1);
-      colliders.push({
-        minX: ox - 5.0 - b1W / 2 - 0.3,
-        maxX: ox - 5.0 + b1W / 2 + 0.3,
-        minZ: oz - b1D / 2 - 0.3,
-        maxZ: oz + b1D / 2 + 0.3,
-        height: b1H,
+      // River Valley biome: flowing blue river channel + grassy banks + driveable stone bridge!
+      const bankBase = new THREE.Mesh(
+        new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE),
+        this.mats.grass
+      );
+      bankBase.rotation.x = -Math.PI / 2;
+      group.add(bankBase);
+
+      // Wide shimmering blue river flowing east-west across the chunk
+      const water = new THREE.Mesh(
+        new THREE.PlaneGeometry(CHUNK_SIZE, 16),
+        this.mats.riverWater
+      );
+      water.rotation.x = -Math.PI / 2;
+      water.position.y = 0.04;
+      group.add(water);
+
+      // Sandy riverbanks along both shores
+      [-9.2, 9.2].forEach((bz) => {
+        const shore = new THREE.Mesh(new THREE.BoxGeometry(CHUNK_SIZE, 0.14, 2.8), this.mats.sand);
+        shore.position.set(0, 0.05, bz);
+        group.add(shore);
       });
 
-      const b2W = 7.6 + hash2D(cx, cz + 5) * 1.6;
-      const b2D = 16.5;
-      const b2H = 12 + Math.floor(hash2D(cx, cz * 5) * 34);
-      const s2 = ((s1 + 1) % 3) as 0 | 1 | 2;
-      const b2 = createBuildingModel(b2W, b2H, b2D, s2, this.mats, !this.isSoftwareGl);
-      b2.position.set(5.2, 0.22, 0);
-      group.add(b2);
-      colliders.push({
-        minX: ox + 5.2 - b2W / 2 - 0.3,
-        maxX: ox + 5.2 + b2W / 2 + 0.3,
-        minZ: oz - b2D / 2 - 0.3,
-        maxZ: oz + b2D / 2 + 0.3,
-        height: b2H,
+      // Driveable Stone Bridge spanning the river along the avenue corridor (+X side)
+      const bridgeX = CHUNK_SIZE / 2 - 4.5;
+      const deck = new THREE.Mesh(new THREE.BoxGeometry(8.6, 0.34, 19.5), this.mats.bridgeStone);
+      deck.position.set(bridgeX, 0.2, 0);
+      group.add(deck);
+
+      // Bridge side railings
+      [-4.1, 4.1].forEach((rx) => {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.35, 1.0, 19.5), this.mats.roofDark);
+        rail.position.set(bridgeX + rx, 0.72, 0);
+        group.add(rail);
+      });
+
+      // Riverside trees on the grassy banks
+      [
+        [-8, -13],
+        [-3, 13.2],
+      ].forEach(([tx, tz]) => {
+        const tree = createPlainsTreeModel(this.mats);
+        tree.position.set(tx, 0, tz);
+        group.add(tree);
       });
     }
 
-    // Spawn a street supply crate on sidewalk if pool has room
-    if (this.lootCrates.length < 18 && seed > 0.32) {
+    // Spawn a street supply crate on sidewalk/clearing if pool has room
+    if (this.lootCrates.length < 14 && seed > 0.34 && biome !== 'river') {
       this.spawnLootCrate(ox + 9.2, oz - 8.5);
     }
 
@@ -678,23 +841,23 @@ export class InfiniteCityEngine {
     // Spawn 1 parked starter hero car right on the avenue near player!
     this.spawnCarAt(17, 6, 'z', -1, 0, 0);
 
-    // Spawn 8 autonomous traffic cars along avenues
-    for (let i = 0; i < 8; i++) {
+    // Spawn 5 autonomous traffic cars along avenues
+    for (let i = 0; i < 5; i++) {
       const axis: 'x' | 'z' = i % 2 === 0 ? 'z' : 'x';
       const dir: 1 | -1 = i % 4 < 2 ? 1 : -1;
       const laneOffset = dir === 1 ? 2.6 : -2.6;
       const roadLine = (Math.floor(i / 2) - 1) * CHUNK_SIZE + CHUNK_SIZE / 2;
-      const along = (Math.random() - 0.5) * 90;
+      const along = (Math.random() - 0.5) * 80;
       const x = axis === 'z' ? roadLine + laneOffset : along;
       const z = axis === 'x' ? roadLine + laneOffset : along;
       this.spawnCarAt(x, z, axis, dir, i + 1, 9 + Math.random() * 5);
     }
 
-    // Spawn 10 Civilians + 6 Syndicate Enforcers
-    for (let i = 0; i < 10; i++) {
+    // Spawn 6 Civilians + only 2 Syndicate Enforcers (balanced & low-end friendly)
+    for (let i = 0; i < 6; i++) {
       this.spawnNpcAroundPlayer('civilian');
     }
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 2; i++) {
       this.spawnNpcAroundPlayer('syndicate');
     }
   }
@@ -1195,7 +1358,7 @@ export class InfiniteCityEngine {
         this.addXp(45);
         this.syndicateKills += 1;
         this.showToast(`Syndicate Down! +$45 · +2 Scrap · +1 Tech`);
-        if (this.chapterIndex === 3 && this.syndicateKills >= 5) {
+        if (this.chapterIndex === 3 && this.syndicateKills >= 3) {
           this.advanceChapter(4);
         }
       } else {
@@ -1313,12 +1476,6 @@ export class InfiniteCityEngine {
     this.camera.fov = isPortrait ? 78 : 68;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
-    if (this.composer) {
-      this.composer.setSize(w, h);
-    }
-    if (this.bloomPass) {
-      this.bloomPass.resolution.set(w, h);
-    }
   };
 
   private handleDeviceOrientation = (e: DeviceOrientationEvent): void => {
@@ -1461,10 +1618,8 @@ export class InfiniteCityEngine {
     this.fog.color.copy(_colorA);
 
     this.skyDome.position.copy(this.camera.position);
-    this.mats.skyMaterial.uniforms.uTime.value = this.elapsedTime;
     this.mats.skyMaterial.uniforms.uHorizonColor.value.copy(_colorA);
     this.mats.skyMaterial.uniforms.uZenithColor.value.copy(_colorC);
-    this.mats.skyMaterial.uniforms.uRainFactor.value = this.rainIntensity;
     this.mats.skyMaterial.uniforms.uNightFactor.value = nightFactor;
 
     _v3A.set(Math.cos(sunAngle) * 45, Math.max(8, sunElev * 55 + 15), Math.sin(sunAngle) * 35).normalize();
@@ -1593,8 +1748,8 @@ export class InfiniteCityEngine {
           moveSpeed = distToPlayer > 12 ? npc.speed : 0;
 
           npc.fireCooldown -= dt;
-          if (npc.fireCooldown <= 0 && distToPlayer < 26) {
-            npc.fireCooldown = npc.role === 'boss' ? 0.85 : 1.55;
+          if (npc.fireCooldown <= 0 && distToPlayer < 24) {
+            npc.fireCooldown = npc.role === 'boss' ? 1.15 : 2.35;
             const start = _v3A.set(npc.x, 1.5, npc.z);
             const target = _v3B.set(
               this.playerPos.x + (Math.random() - 0.5) * 1.1,
@@ -1604,9 +1759,9 @@ export class InfiniteCityEngine {
             this.spawnTracer(start, target, npc.role === 'boss' ? 0xf59e0b : 0xef4444);
 
             // Accuracy roll (reduced if player is moving fast in car)
-            const hitChance = this.drivenCar ? 0.25 : 0.55;
+            const hitChance = this.drivenCar ? 0.2 : 0.45;
             if (Math.random() < hitChance) {
-              const rawDmg = npc.role === 'boss' ? 14 : 8;
+              const rawDmg = npc.role === 'boss' ? 10 : 5;
               this.applyPlayerDamage(rawDmg);
             }
           }
@@ -1644,9 +1799,9 @@ export class InfiniteCityEngine {
       npc.hitMesh.position.set(npc.x, 0.22 + (npc.role === 'boss' ? 1.35 : 1.0), npc.z);
     }
 
-    // Keep city populated as player moves infinitely
-    if (civilianCount < 8) this.spawnNpcAroundPlayer('civilian');
-    if (syndicateCount < 5) this.spawnNpcAroundPlayer('syndicate');
+    // Keep world populated lightly (max 2 Syndicate Enforcers)
+    if (civilianCount < 5) this.spawnNpcAroundPlayer('civilian');
+    if (syndicateCount < 2) this.spawnNpcAroundPlayer('syndicate');
   }
 
   private applyPlayerDamage(dmg: number): void {
@@ -1780,27 +1935,14 @@ export class InfiniteCityEngine {
       this.lookYaw = THREE.MathUtils.damp(this.lookYaw, car.yaw, 9, dt);
       this.audio.setCarEngine(true, car.speed / 26);
 
-      // First-Person Hood/Windshield Driving Camera + Live Headlight SpotLight
+      // First-Person Hood/Windshield Driving Camera
       this.camera.position.set(
         car.x - Math.sin(car.yaw) * 0.25,
         1.52,
         car.z - Math.cos(car.yaw) * 0.25
       );
       this.camera.rotation.set(this.lookPitch * 0.4 - 0.04, this.lookYaw, -moveRight * 0.035, 'YXZ');
-
-      this.carSpotLight.intensity = 6.5;
-      this.carSpotLight.position.set(
-        car.x - Math.sin(car.yaw) * 2.2,
-        1.05,
-        car.z - Math.cos(car.yaw) * 2.2
-      );
-      this.carSpotLight.target.position.set(
-        car.x - Math.sin(car.yaw) * 24,
-        0.2,
-        car.z - Math.cos(car.yaw) * 24
-      );
     } else {
-      this.carSpotLight.intensity = 0;
       // On-Foot First-Person Movement
       const isSprinting =
         this.virtualSprint || this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
@@ -1942,7 +2084,7 @@ export class InfiniteCityEngine {
     if (this.chapterIndex === 0) return `${Math.min(3, this.cratesLooted)} / 3 Crates`;
     if (this.chapterIndex === 1) return this.unlockedWeapons.size > 1 ? 'Forged' : '0 / 1 Gun';
     if (this.chapterIndex === 2) return `${Math.min(120, Math.floor(this.driveDistanceAccum))} / 120m`;
-    if (this.chapterIndex === 3) return `${Math.min(5, this.syndicateKills)} / 5 Guards`;
+    if (this.chapterIndex === 3) return `${Math.min(3, this.syndicateKills)} / 3 Guards`;
     return this.bossDefeated ? 'Defeated' : 'Boss Active';
   }
 
@@ -1955,7 +2097,7 @@ export class InfiniteCityEngine {
       chapterIndex: this.chapterIndex,
       chapterTitle: this.endlessFreeRoam ? 'Apex Legend · Free Roam' : ch.title,
       objectiveText: this.endlessFreeRoam
-        ? 'Roam the infinite city, drive cars, and fight Syndicate patrols'
+        ? 'Roam the infinite world, drive across biomes, and rule the skyline'
         : ch.objective,
       objectiveProgress: this.getObjectiveProgress(),
       level: this.level,
@@ -1980,6 +2122,7 @@ export class InfiniteCityEngine {
       timeOfDayLabel: this.getTimeOfDayLabel(),
       dayCount: this.dayCount,
       weather: this.weather,
+      biomeLabel: BIOME_LABELS[this.currentBiome],
       cinematicHeadline: this.cinematicHeadline,
       cinematicSubtitle: this.cinematicSubtitle,
       hitMarker: this.hitMarkerTimer > 0,
@@ -1990,6 +2133,10 @@ export class InfiniteCityEngine {
 
   private afterDraw(cb: () => void): void {
     const gl = this.renderer.getContext() as WebGL2RenderingContext;
+    if (typeof gl.fenceSync !== 'function') {
+      this.frameId = window.setTimeout(cb, 50);
+      return;
+    }
     const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     gl.flush();
     const poll = () => {
@@ -2013,11 +2160,7 @@ export class InfiniteCityEngine {
     const dt = Math.min(Math.max(rawDt, 0.001), 0.05);
 
     this.updateSimulation(dt);
-    if (this.composer && !this.isSoftwareGl) {
-      this.composer.render();
-    } else {
-      this.renderer.render(this.scene, this.camera);
-    }
+    this.renderer.render(this.scene, this.camera);
 
     this.hudThrottleTimer += dt;
     if (this.hudThrottleTimer >= 0.1) {

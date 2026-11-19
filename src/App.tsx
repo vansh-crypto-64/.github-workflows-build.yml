@@ -36,6 +36,7 @@ const INITIAL_HUD: HudSnapshot = {
   timeOfDayLabel: '06:45',
   dayCount: 1,
   weather: 'rain',
+  biomeLabel: 'Metro City',
   cinematicHeadline: STORY_CHAPTERS[0].cinematicHeadline,
   cinematicSubtitle: STORY_CHAPTERS[0].cinematicSubtitle,
   hitMarker: false,

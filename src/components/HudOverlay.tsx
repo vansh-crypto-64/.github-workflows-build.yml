@@ -99,6 +99,9 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
                 )}
                 <span>D{hud.dayCount} · {hud.timeOfDayLabel}</span>
               </div>
+              <div className="text-[10px] font-semibold text-amber-300/95 tracking-wide mt-0.5">
+                {hud.biomeLabel}
+              </div>
 
               {/* Health Bar */}
               <div className="mt-1.5 flex items-center justify-end gap-1.5">
